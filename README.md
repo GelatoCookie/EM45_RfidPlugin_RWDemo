@@ -1,7 +1,8 @@
+
 # Repository Info
 
 - **Remote (origin):** https://github.com/GelatoCookie/EM45_RWDemo
-- **Local directory:** /Users/chucklin/StudioProjects/55_myRWDemo/RfidECRT-RWDemo-1.0.6.2
+- **Local directory:** /Users/chucklin/StudioProjects/59_EM45_DWPlugin_RWDemo/EM45_RfidPlugin_RWDemo
 
 # Zebra RFID RWDemo
 

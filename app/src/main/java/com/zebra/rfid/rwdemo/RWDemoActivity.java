@@ -22,6 +22,8 @@ import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.ShapeDrawable;
+import android.media.AudioManager;
+import android.media.ToneGenerator;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -41,13 +43,16 @@ import android.widget.ProgressBar;
 import android.widget.RelativeLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.core.content.ContextCompat;
 
 import com.zebra.rfid.rwdemo.databinding.DwdemoMainBinding;
 
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -107,7 +112,11 @@ public class RWDemoActivity extends Activity implements OnClickListener,    OnMe
     private long clickTime = 0;
 
     private DwdemoMainBinding binding;
-    private AlertDialog statusDialog;
+    private AlertDialog aboutDialog;
+    private String lastStatusMessage = "";
+    private final List<String> statusHistory = new ArrayList<>();
+
+    private ToneGenerator mToneGenerator;
 
     private final Handler mHandler = new Handler(Looper.getMainLooper());
     private final Runnable mProfileCheckRunnable = new Runnable() {
@@ -120,12 +129,6 @@ public class RWDemoActivity extends Activity implements OnClickListener,    OnMe
                 sendBroadcast(intent);
                 mHandler.postDelayed(this, 1000);
             }
-        }
-    };
-
-    private final Runnable mDismissRunnable = () -> {
-        if (statusDialog != null && statusDialog.isShowing()) {
-            statusDialog.dismiss();
         }
     };
 
@@ -223,6 +226,12 @@ public class RWDemoActivity extends Activity implements OnClickListener,    OnMe
         binding = DwdemoMainBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
+        try {
+            mToneGenerator = new ToneGenerator(AudioManager.STREAM_MUSIC, 100);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to create ToneGenerator", e);
+        }
+
         if (savedInstanceState == null) {
             Intent intent = getIntent();
             if (intent != null) {//data intent
@@ -258,18 +267,10 @@ public class RWDemoActivity extends Activity implements OnClickListener,    OnMe
             clearReadResults();
         });
 
-        binding.actionButton2.setImageResource(R.drawable.rfid_icon_s);
-        binding.actionButton2.setEnabled(false);
-
-        binding.actionButton3.setOnClickListener(this);
-
         binding.actionButton4.setOnClickListener(v -> {
             showPopupMenu(v, RWDemoActivity.DW_DEMO_POPUP_MENU_SETTINGS);
         });
 
-//        binding.btnResetHeader.setOnClickListener(v -> {
-//            clearReadResults();
-//        });
     }
 
     @Override
@@ -337,6 +338,7 @@ public class RWDemoActivity extends Activity implements OnClickListener,    OnMe
             binding.readerStatusLayout.setVisibility(View.VISIBLE);
             binding.readerStatus.setBackgroundColor(ContextCompat.getColor(this, R.color.status_ok));
             playOkBeep();
+            //showStatusMessage(getString(R.string.msg_button_enabled));
         } else {
             binding.softscanbutton.setAlpha(disabledButtonAlphaValue);
             binding.rfidStatus.setText(R.string.status_disabled);
@@ -347,19 +349,45 @@ public class RWDemoActivity extends Activity implements OnClickListener,    OnMe
             binding.readerStatus.setBackgroundColor(ContextCompat.getColor(this, R.color.status_error));
             // Play a simple beep twice on disconnect
             playBeepTwice();
+            //showStatusMessage(getString(R.string.msg_button_disabled));
+        }
+    }
+
+    private void showStatusMessage(String message) {
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+        // Also add to history
+        updateStatusHistory(message);
+    }
+
+    private void updateStatusHistory(String message) {
+        if (!message.equals(lastStatusMessage)) {
+            String timeStamp = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
+            statusHistory.add(0, timeStamp + ": " + message); // Newest on top
+            if (statusHistory.size() > 50) {
+                statusHistory.remove(statusHistory.size() - 1);
+            }
+            lastStatusMessage = message;
+
+            StringBuilder historyText = new StringBuilder();
+            for (int i = 0; i < statusHistory.size(); i++) {
+                historyText.append(statusHistory.get(i));
+                if (i < statusHistory.size() - 1) {
+                    historyText.append("\n");
+                }
+            }
+
         }
     }
 
     // Play a simple beep sound twice
     private void playBeepTwice() {
+        if (mToneGenerator == null) return;
         new Thread(() -> {
             try {
-                android.media.ToneGenerator toneGen = new android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 100);
                 for (int i = 0; i < 2; i++) {
-                    toneGen.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 200);
+                    mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 200);
                     Thread.sleep(300);
                 }
-                toneGen.release();
             } catch (Exception e) {
                 // Ignore
             }
@@ -368,16 +396,9 @@ public class RWDemoActivity extends Activity implements OnClickListener,    OnMe
 
     // Play a single OK beep
     private void playOkBeep() {
-        new Thread(() -> {
-            try {
-                android.media.ToneGenerator toneGen = new android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 100);
-                toneGen.startTone(android.media.ToneGenerator.TONE_PROP_ACK, 200);
-                Thread.sleep(250);
-                toneGen.release();
-            } catch (Exception e) {
-                // Ignore
-            }
-        }).start();
+        if (mToneGenerator != null) {
+            mToneGenerator.startTone(ToneGenerator.TONE_PROP_ACK, 200);
+        }
     }
 
 
@@ -393,15 +414,12 @@ public class RWDemoActivity extends Activity implements OnClickListener,    OnMe
         // These things should happen regardless of unregistering success or not.
         rwDemoProfileActivated = true;
         mHandler.removeCallbacks(mProfileCheckRunnable);
-        mHandler.removeCallbacks(mDismissRunnable);
         mHandler.removeCallbacks(mIdleStopRunnable);
         if (progressBar != null) {
             progressBar.setVisibility(View.GONE);
         }
         
-        if (statusDialog != null && statusDialog.isShowing()) {
-            statusDialog.dismiss();
-        }
+        dismissAboutDialog();
 
         try {
             // Unregister for notifications
@@ -442,21 +460,17 @@ public class RWDemoActivity extends Activity implements OnClickListener,    OnMe
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (mToneGenerator != null) {
+            mToneGenerator.release();
+            mToneGenerator = null;
+        }
         binding = null;
     }
 
     public boolean onOptionsItemSelected(MenuItem item) {
         int id = item.getItemId();
         if (id == R.id.action_about) {
-            AlertDialog builder;
-            try {
-                builder = AboutDialogBuilder.create(this);
-                builder.show();
-            } catch (Exception e) {
-                if (DEBUG) {
-                    Log.d(TAG, e.toString());
-                }
-            }
+            showAboutDialog();
             return true;
         } else {
             return super.onOptionsItemSelected(item);
@@ -495,18 +509,29 @@ public class RWDemoActivity extends Activity implements OnClickListener,    OnMe
     public boolean onMenuItemClick(MenuItem item) {
         int id = item.getItemId();
         if (id == R.id.action_about) {
-            AlertDialog ad;
-            try {
-                ad = AboutDialogBuilder.create(this);
-                ad.show();
-            } catch (Exception e) {
-                if (DEBUG) {
-                    Log.d(TAG, e.toString());
-                }
-            }
+            showAboutDialog();
             return true;
         }
         return false;
+    }
+
+    private void showAboutDialog() {
+        dismissAboutDialog();
+        try {
+            aboutDialog = AboutDialogBuilder.create(this);
+            aboutDialog.show();
+        } catch (Exception e) {
+            if (DEBUG) {
+                Log.d(TAG, e.toString());
+            }
+        }
+    }
+
+    private void dismissAboutDialog() {
+        if (aboutDialog != null && aboutDialog.isShowing()) {
+            aboutDialog.dismiss();
+        }
+        aboutDialog = null;
     }
 
     private void scrollDown() {
@@ -689,7 +714,7 @@ public class RWDemoActivity extends Activity implements OnClickListener,    OnMe
         public static AlertDialog create(Context context) {
 
             // Try to load the a package matching the name of our own package
-            String versionInfo = "1.0.6.2";
+            String versionInfo = "1.0.6.3";
             int msgPadding = 5;
 
             String aboutTitle = context.getString(R.string.dwdemo2_about_title);
@@ -784,6 +809,7 @@ public class RWDemoActivity extends Activity implements OnClickListener,    OnMe
                         progressBar.setVisibility(View.GONE);
                     }
                     scanState = false;
+                    //showStatusMessage(getString(R.string.msg_profile_activated));
                 }
             }
 
@@ -810,9 +836,9 @@ public class RWDemoActivity extends Activity implements OnClickListener,    OnMe
                             scannerStateText = status;
                             updateScannerStatus();
                             if (status.equalsIgnoreCase("SCANNING")) {
-                                updateStatusDialog(getString(R.string.dialog_reading), false);
+                                updateStatusHistory(getString(R.string.dialog_reading));
                             } else if (status.equalsIgnoreCase("WAITING") || status.equalsIgnoreCase("READY")) {
-                                updateStatusDialog(getString(R.string.dialog_stopped), true);
+                                updateStatusHistory(getString(R.string.dialog_stopped));
                             }
                         } else if (type.equals(RWDemoIntentParams.NOTIFICATION_TYPE_RFID)) {
                             if (status.equalsIgnoreCase("SCANNING")) {
@@ -823,31 +849,34 @@ public class RWDemoActivity extends Activity implements OnClickListener,    OnMe
                                 binding.rfidStatus.setText(R.string.status_reading);
                                 binding.rfidStatusLayout.setVisibility(View.VISIBLE);
                                 binding.rfidStatus.setBackgroundColor(ContextCompat.getColor(context, R.color.status_busy));
-                                updateStatusDialog(getString(R.string.dialog_reading), false);
+                                updateStatusHistory(getString(R.string.dialog_reading));
                             } else if (status.equalsIgnoreCase("WAITING") || status.equalsIgnoreCase("READY")) {
                                 isReadingSessionActive = false;
                                 binding.rfidStatus.setText(R.string.status_ready);
                                 binding.rfidStatusLayout.setVisibility(View.VISIBLE);
                                 binding.rfidStatus.setBackgroundColor(ContextCompat.getColor(context, R.color.status_ok));
-                                updateStatusDialog(getString(R.string.dialog_stopped), true);
+                                updateStatusHistory(getString(R.string.dialog_stopped));
                             } else if (status.equalsIgnoreCase("UNKNOWN")) {
                                 binding.rfidStatusLayout.setVisibility(View.GONE);
                             } else {
                                 binding.rfidStatus.setText(status);
                                 binding.rfidStatusLayout.setVisibility(View.VISIBLE);
                                 binding.rfidStatus.setBackgroundColor(ContextCompat.getColor(context, R.color.status_error));
+                                updateStatusHistory(status);
                             }
                         } else if (type.equals(RWDemoIntentParams.NOTIFICATION_TYPE_READER)) {
                             if (status.equalsIgnoreCase("CONNECTED")) {
                                 binding.readerStatus.setText(R.string.status_connected);
                                 binding.readerStatusLayout.setVisibility(View.VISIBLE);
                                 binding.readerStatus.setBackgroundColor(ContextCompat.getColor(context, R.color.status_ok));
+                                updateStatusHistory("Reader Connected");
                             } else if (status.equalsIgnoreCase("UNKNOWN")) {
                                 binding.readerStatusLayout.setVisibility(View.GONE);
                             } else {
                                 binding.readerStatus.setText(status);
                                 binding.readerStatusLayout.setVisibility(View.VISIBLE);
                                 binding.readerStatus.setBackgroundColor(ContextCompat.getColor(context, R.color.status_error));
+                                updateStatusHistory("Reader: " + status);
                             }
                         }
                     }
@@ -861,32 +890,16 @@ public class RWDemoActivity extends Activity implements OnClickListener,    OnMe
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
             if (Intent.ACTION_POWER_CONNECTED.equals(action)) {
-                updateStatusDialog(getString(R.string.dialog_charging), true);
+                updateStatusHistory(getString(R.string.dialog_charging));
                 moveTaskToBack(true);
             } else if (Intent.ACTION_POWER_DISCONNECTED.equals(action)) {
-                updateStatusDialog(getString(R.string.dialog_discharging), true);
+                updateStatusHistory(getString(R.string.dialog_discharging));
                 Intent i = new Intent(context, RWDemoActivity.class);
                 i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
                 context.startActivity(i);
             }
         }
     };
-
-    private void updateStatusDialog(String message, boolean autoDismiss) {
-        mHandler.removeCallbacks(mDismissRunnable);
-        if (statusDialog == null) {
-            statusDialog = new AlertDialog.Builder(this)
-                    .setCancelable(false)
-                    .create();
-        }
-        statusDialog.setMessage(message);
-        if (!statusDialog.isShowing()) {
-            statusDialog.show();
-        }
-        if (autoDismiss) {
-            mHandler.postDelayed(mDismissRunnable, 1000);
-        }
-    }
 
     /**
      * Dynamically register broadcast receiver

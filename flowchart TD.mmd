@@ -1,0 +1,27 @@
+flowchart TD
+    Start([App Start])
+    InitUI[Initialize UI & Data Binding]
+    SetProfile[Setup/Check DataWedge Profile]
+    RegisterReceivers[Register Broadcast Receivers]
+    ProfileCheck[Profile Check Loop]
+    WaitEvents{Event?}
+    ScanIntent[Scan Intent Received]
+    ParseData[Parse & Dedupe Data]
+    UpdateCounters[Update Counters]
+    UpdateOutput[Update Output View]
+    StatusNotif[Status Notification]
+    UpdateStatus[Update Status UI]
+    PlayBeep[Play Beep (OK/Disconnect)]
+    ConnectionChange[Connection/Disconnection]
+    SessionStart[Session Start]
+    SessionStop[Session Stop]
+    End([End])
+
+    Start --> InitUI --> SetProfile --> RegisterReceivers --> ProfileCheck
+    ProfileCheck --> WaitEvents
+    WaitEvents -->|Scan| ScanIntent --> ParseData --> UpdateCounters --> UpdateOutput --> WaitEvents
+    WaitEvents -->|Status| StatusNotif --> UpdateStatus --> WaitEvents
+    WaitEvents -->|Connection| ConnectionChange --> PlayBeep --> UpdateStatus
+    ScanIntent -->|Session Start| SessionStart --> WaitEvents
+    StatusNotif -->|Session Stop| SessionStop --> WaitEvents
+    UpdateOutput --> End

@@ -1,0 +1,927 @@
+/**
+ * Copyright (C) 2026 Zebra Technologies Corporation and/or its affiliates.
+ * All rights reserved.
+ */
+package com.zebra.rfid.rwdemo;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.pm.ActivityInfo;
+import android.content.pm.PackageInfo;
+import android.content.res.Resources;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Color;
+import android.graphics.PorterDuff.Mode;
+import android.graphics.Shader;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.LayerDrawable;
+import android.graphics.drawable.ShapeDrawable;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Parcelable;
+import android.os.SystemClock;
+import android.text.SpannableString;
+import android.util.Log;
+import android.view.KeyEvent;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.widget.ImageButton;
+import android.widget.PopupMenu;
+import android.widget.PopupMenu.OnMenuItemClickListener;
+import android.widget.ProgressBar;
+import android.widget.RelativeLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+
+import androidx.core.content.ContextCompat;
+
+import com.zebra.rfid.rwdemo.databinding.DwdemoMainBinding;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
+import static com.zebra.rfid.rwdemo.RWDemoIntentParams.GET_ACTIVE_PROFILE;
+import static com.zebra.rfid.rwdemo.RWDemoIntentParams.RESULT_ACTION;
+import static com.zebra.rfid.rwdemo.RWDemoIntentParams.RESULT_GET_ACTIVE_PROFILE;
+
+
+/**
+ * RWDemoActivity is  a demo application that designed to read RFID Tags.
+ * To read RFID tags RWDemoActivity uses intent API of a DataWedge Application.
+ */
+public class RWDemoActivity extends Activity implements OnClickListener,    OnMenuItemClickListener {
+
+    private static final String TAG = RWDemoActivity.class.getSimpleName();
+
+    private static final String SOURCE_TAG = "com.symbol.datawedge.source";
+    private static final String DATA_STRING_TAG = "com.symbol.datawedge.data_string";
+    private static final String MSR_DATA_TAG = "com.symbol.datawedge.msr_data";
+
+    private static final String DWAPI_START_SCANNING = "START_SCANNING";
+    private static final String DWAPI_STOP_SCANNING = "STOP_SCANNING";
+
+    private static final String DATA_INTENT = "StartingIntent";
+    private static final String DATA_TXT = "UIText";
+    private static final int VIEW_UPDATE_TIME_IN_MILLISECONDS = 100;
+    private static final int BACKGROUND_GREY_COLOR_CODE = 0xffbfc7cc;
+
+    private static final String SOURCE_SCANNER = "scanner";
+    private static final String SOURCE_MSR = "msr";
+    private static final String DATA_MSR = "[encrypted MSR data]";
+    private static final String ENDLINE_CHAR = "\n";
+
+    private static boolean scanState = false;
+
+    public static boolean DEBUG = false;
+
+    private static final float disabledButtonAlphaValue = 0.2f;
+    private static final float enabledButtonAlphaValue = 1f;
+    private boolean rwDemoProfileActivated = false;
+    private ProgressBar progressBar;
+    private static final int PROGRESS_BAR_WIDTH = 50;
+    private static final int PROGRESS_BAR_HIGHT = 50;
+
+    private String tvText = "";
+    private int totalReadCount = 0;
+    private final Set<String> uniqueReads = new HashSet<>();
+    private String scannerStateText = "UNKNOWN";
+    private boolean isReadingSessionActive = false;
+
+    private static final int DW_DEMO_POPUP_MENU_SETTINGS = 1;
+
+    private Intent mDataIntent = null;
+    private boolean onNewIntentToOnResume;
+    private long clickTime = 0;
+
+    private DwdemoMainBinding binding;
+    private AlertDialog statusDialog;
+
+    private final Handler mHandler = new Handler(Looper.getMainLooper());
+    private final Runnable mProfileCheckRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!rwDemoProfileActivated) {
+                Intent intent = new Intent();
+                intent.setAction(RWDemoIntentParams.ACTION);
+                intent.putExtra(GET_ACTIVE_PROFILE, "");
+                sendBroadcast(intent);
+                mHandler.postDelayed(this, 1000);
+            }
+        }
+    };
+
+    private final Runnable mDismissRunnable = () -> {
+        if (statusDialog != null && statusDialog.isShowing()) {
+            statusDialog.dismiss();
+        }
+    };
+
+    private final Runnable mIdleStopRunnable = () -> {
+        if (scanState) {
+            Log.d(TAG, "No new tags for 2 seconds. Stopping RFID trigger.");
+            toggleSoftScanTrigger();
+        }
+    };
+
+
+    private void createProfile() {
+
+        Bundle setConfigBundle = new Bundle();
+        setConfigBundle.putString(RWDemoIntentParams.BUNDLE_EXTRA_PROFILE_NAME_KEY, RWDemoIntentParams.BUNDLE_EXTRA_PROFILE_NAME_VAL);
+        setConfigBundle.putString(RWDemoIntentParams.BUNDLE_EXTRA_CONFIG_MODE_KEY, RWDemoIntentParams.BUNDLE_EXTRA_CONFIG_MODE_VAL);
+        setConfigBundle.putString(RWDemoIntentParams.BUNDLE_EXTRA_PROFILE_ENABLED_KEY, RWDemoIntentParams.BUNDLE_EXTRA_PROFILE_ENABLED_VAL);
+        setConfigBundle.putString(RWDemoIntentParams.BUNDLE_EXTRA_RESET_CONFIG_KEY, RWDemoIntentParams.BUNDLE_EXTRA_RESET_CONFIG_VAL);
+
+        // Associate profile with this app
+        Bundle appConfig = new Bundle();
+        appConfig.putString(RWDemoIntentParams.BUNDLE_EXTRA_PACKAGE_NAME_KEY, getPackageName());
+        appConfig.putStringArray(RWDemoIntentParams.BUNDLE_EXTRA_ACTIVITY_LIST_KEY, RWDemoIntentParams.BUNDLE_EXTRA_ACTIVITY_LIST_VAL_ARR);
+        setConfigBundle.putParcelableArray(RWDemoIntentParams.BUNDLE_EXTRA_APP_LIST_KEY, new Bundle[]{appConfig});
+        setConfigBundle.remove(RWDemoIntentParams.BUNDLE_EXTRA_PLUGIN_CONFIG);
+
+        // Barcode Input configurations (Disabled)
+        Bundle barcodeConfigParamList = new Bundle();
+        barcodeConfigParamList.putString(RWDemoIntentParams.BARCODE_ENABLED_KEY, RWDemoIntentParams.BARCODE_ENABLED_VALUE);
+
+        Bundle barcodeConfigBundle = new Bundle();
+        barcodeConfigBundle.putString(RWDemoIntentParams.BUNDLE_EXTRA_PLUGIN_NAME, RWDemoIntentParams.PLUGIN_NAME_BARCODE);
+        barcodeConfigBundle.putString(RWDemoIntentParams.BUNDLE_EXTRA_RESET_CONFIG_KEY, RWDemoIntentParams.BUNDLE_EXTRA_RESET_CONFIG_VAL);
+        barcodeConfigBundle.putBundle(RWDemoIntentParams.BUNDLE_EXTRA_PARAM_LIST, barcodeConfigParamList);
+
+        // RFID Input configurations
+        Bundle rfidConigParamList = new Bundle();
+        rfidConigParamList.putString(RWDemoIntentParams.PLUGIN_ENABLE_PARAM_KEY, RWDemoIntentParams.PLUGIN_ENABLE_PARAM_VAL);
+
+        Bundle rfidConfigBundle = new Bundle();
+        rfidConfigBundle.putString(RWDemoIntentParams.BUNDLE_EXTRA_PLUGIN_NAME, RWDemoIntentParams.PLUGIN_NAME_RFID);
+        rfidConfigBundle.putString(RWDemoIntentParams.BUNDLE_EXTRA_RESET_CONFIG_KEY, RWDemoIntentParams.BUNDLE_EXTRA_RESET_CONFIG_VAL);
+        rfidConfigBundle.putBundle(RWDemoIntentParams.BUNDLE_EXTRA_PARAM_LIST, rfidConigParamList);
+
+        Bundle rfidFormattingConfigBundle = new Bundle();
+        rfidFormattingConfigBundle.putString(RWDemoIntentParams.BUNDLE_EXTRA_PLUGIN_NAME, RWDemoIntentParams.PLUGIN_NAME_RFID_F);
+        rfidFormattingConfigBundle.putString(RWDemoIntentParams.BUNDLE_EXTRA_OUTPUT_PLUGIN_NAME, RWDemoIntentParams.PLUGIN_NAME_INTENT);
+        rfidFormattingConfigBundle.putString(RWDemoIntentParams.BUNDLE_EXTRA_RESET_CONFIG_KEY, RWDemoIntentParams.BUNDLE_EXTRA_RESET_CONFIG_VAL);
+        Bundle rfidFormattingParamList = new Bundle();
+        rfidFormattingParamList.putString(RWDemoIntentParams.PLUGIN_RFID_F_ENABLE_PARAM, RWDemoIntentParams.PLUGIN_RFID_F_ENABLE_VALUE);
+        rfidFormattingConfigBundle.putBundle(RWDemoIntentParams.BUNDLE_EXTRA_PARAM_LIST, rfidFormattingParamList);
+
+        // Configure intent output for captured data to be sent to this app
+        Bundle intentConfig = new Bundle();
+        intentConfig.putString(RWDemoIntentParams.BUNDLE_EXTRA_PLUGIN_NAME, RWDemoIntentParams.PLUGIN_NAME_INTENT);
+        intentConfig.putString(RWDemoIntentParams.BUNDLE_EXTRA_RESET_CONFIG_KEY, RWDemoIntentParams.BUNDLE_EXTRA_RESET_CONFIG_VAL);
+        Bundle intentProps = new Bundle();
+        intentProps.putString(RWDemoIntentParams.INTENT_OUTPUT_ENABLED_KEY, RWDemoIntentParams.INTENT_OUTPUT_ENABLED_VALUE);
+        intentProps.putString(RWDemoIntentParams.INTENT_ACTION_KEY, RWDemoIntentParams.INTENT_ACTION_VALUE);
+        intentProps.putString(RWDemoIntentParams.INTENT_CATEGORY_KEY, RWDemoIntentParams.INTENT_CATEGORY_VALUE);
+        intentProps.putString(RWDemoIntentParams.INTENT_DELIVERY_KEY, RWDemoIntentParams.INTENT_DELIVERY_VALUE);
+        intentConfig.putBundle(RWDemoIntentParams.BUNDLE_EXTRA_PARAM_LIST, intentProps);
+
+        // Configure KeyStroke for captured data to be sent to this app
+        Bundle keyStrokeConfig = new Bundle();
+        keyStrokeConfig.putString(RWDemoIntentParams.BUNDLE_EXTRA_PLUGIN_NAME, RWDemoIntentParams.PLUGIN_NAME_KEYSTROKE);
+        keyStrokeConfig.putString(RWDemoIntentParams.BUNDLE_EXTRA_RESET_CONFIG_KEY, RWDemoIntentParams.BUNDLE_EXTRA_RESET_CONFIG_VAL);
+        Bundle keyStrokeProps = new Bundle();
+        keyStrokeProps.putString(RWDemoIntentParams.KEYSTROKE_ENABLED_KEY, RWDemoIntentParams.KEYSTROKE_ENABLED_VALUE);
+        keyStrokeConfig.putBundle(RWDemoIntentParams.BUNDLE_EXTRA_PARAM_LIST, keyStrokeProps);
+
+
+        ArrayList<Parcelable> configBundles = new ArrayList<>();
+        configBundles.add(barcodeConfigBundle);
+        configBundles.add(rfidConfigBundle);
+        configBundles.add(rfidFormattingConfigBundle);
+        configBundles.add(intentConfig);
+        configBundles.add(keyStrokeConfig);
+
+        setConfigBundle.putParcelableArrayList(RWDemoIntentParams.BUNDLE_EXTRA_PLUGIN_CONFIG, configBundles);
+
+        Intent intent = new Intent();
+        intent.setAction(RWDemoIntentParams.ACTION);
+        intent.putExtra(RWDemoIntentParams.ACTION_EXTRA_SET_CONFIG, setConfigBundle);
+        sendBroadcast(intent);
+    }
+
+    /**
+     * Called when the activity is first created.
+     */
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        onNewIntentToOnResume = false;
+        binding = DwdemoMainBinding.inflate(getLayoutInflater());
+        setContentView(binding.getRoot());
+
+        if (savedInstanceState == null) {
+            Intent intent = getIntent();
+            if (intent != null) {//data intent
+                String data = intent.getStringExtra(DATA_STRING_TAG);
+                if (data != null)
+                    mDataIntent = intent;
+            }
+            tvText = "";
+        } else {
+            mDataIntent = savedInstanceState.getParcelable(DATA_INTENT);
+            tvText = savedInstanceState.getString(DATA_TXT);
+        }
+
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_NOSENSOR);
+        setMainBackground();
+
+        binding.outputView.setText(tvText);
+        scrollDown();
+
+        updateScannerStatus();
+        updateReadCountStatus();
+
+        binding.softscanbutton.setOnClickListener(v -> {
+            Log.d(TAG, "onClick softScanTrigger pressed");
+            if ((SystemClock.elapsedRealtime() - clickTime) < 1000) {
+                return;
+            }
+            clickTime = SystemClock.elapsedRealtime();
+            toggleSoftScanTrigger();
+        });
+
+        binding.actionButton1.setOnClickListener(v -> {
+            clearReadResults();
+        });
+
+        binding.actionButton2.setImageResource(R.drawable.rfid_icon_s);
+        binding.actionButton2.setEnabled(false);
+
+        binding.actionButton3.setOnClickListener(this);
+
+        binding.actionButton4.setOnClickListener(v -> {
+            showPopupMenu(v, RWDemoActivity.DW_DEMO_POPUP_MENU_SETTINGS);
+        });
+
+//        binding.btnResetHeader.setOnClickListener(v -> {
+//            clearReadResults();
+//        });
+    }
+
+    @Override
+    public void onSaveInstanceState(Bundle savedInstanceState) {
+        if (mDataIntent != null) {
+            savedInstanceState.putParcelable(DATA_INTENT, mDataIntent);
+        }
+        savedInstanceState.putString(DATA_TXT, tvText);
+        super.onSaveInstanceState(savedInstanceState);
+        onNewIntentToOnResume = false;
+    }
+
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        rwDemoProfileActivated = false;
+
+        if(!onNewIntentToOnResume){
+            setSoftScanTriggerEnabled(false);
+
+            binding.relativeLayout1.setVisibility(View.VISIBLE);
+            progressBar = new ProgressBar(RWDemoActivity.this,null,android.R.attr.progressBarStyleSmall);
+            progressBar.setIndeterminate(true);
+            progressBar.setVisibility(View.VISIBLE);
+            RelativeLayout.LayoutParams params = new RelativeLayout.LayoutParams(PROGRESS_BAR_WIDTH,PROGRESS_BAR_HIGHT);
+            params.addRule(RelativeLayout.CENTER_IN_PARENT);
+            binding.relativeLayout1.addView(progressBar,params);
+
+        }
+        registerReceivers();
+
+        // Get available profiles via intent api
+        Intent intentProfGet = new Intent();
+        intentProfGet.setAction(RWDemoIntentParams.ACTION);
+        intentProfGet.putExtra(RWDemoIntentParams.GET_AVAILABLE_PROFILE_LIST, "");
+        this.sendBroadcast(intentProfGet);
+
+
+        Intent i = getIntent();
+        if (mDataIntent != null) {
+            i = mDataIntent;
+        }
+        if (i != null) {
+            handleDecodeData(i);
+        }
+
+        // Fail safe mechanism to find the profile is successfully
+        // switched to the RWDemo profile.
+        if(!onNewIntentToOnResume){
+            rwDemoProfileActivated = false;
+            mHandler.post(mProfileCheckRunnable);
+        }
+
+    }
+
+    private void setSoftScanTriggerEnabled(boolean enabled) {
+        binding.softscanbutton.setEnabled(enabled);
+        if (enabled) {
+            binding.softscanbutton.setAlpha(enabledButtonAlphaValue);
+            binding.rfidStatus.setText(R.string.status_ready);
+            binding.rfidStatusLayout.setVisibility(View.VISIBLE);
+            binding.rfidStatus.setBackgroundColor(ContextCompat.getColor(this, R.color.status_ok));
+            binding.readerStatus.setText(R.string.status_connected);
+            binding.readerStatusLayout.setVisibility(View.VISIBLE);
+            binding.readerStatus.setBackgroundColor(ContextCompat.getColor(this, R.color.status_ok));
+            playOkBeep();
+        } else {
+            binding.softscanbutton.setAlpha(disabledButtonAlphaValue);
+            binding.rfidStatus.setText(R.string.status_disabled);
+            binding.rfidStatusLayout.setVisibility(View.VISIBLE);
+            binding.rfidStatus.setBackgroundColor(ContextCompat.getColor(this, R.color.status_error));
+            binding.readerStatus.setText(R.string.status_disconnected);
+            binding.readerStatusLayout.setVisibility(View.VISIBLE);
+            binding.readerStatus.setBackgroundColor(ContextCompat.getColor(this, R.color.status_error));
+            // Play a simple beep twice on disconnect
+            playBeepTwice();
+        }
+    }
+
+    // Play a simple beep sound twice
+    private void playBeepTwice() {
+        new Thread(() -> {
+            try {
+                android.media.ToneGenerator toneGen = new android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 100);
+                for (int i = 0; i < 2; i++) {
+                    toneGen.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 200);
+                    Thread.sleep(300);
+                }
+                toneGen.release();
+            } catch (Exception e) {
+                // Ignore
+            }
+        }).start();
+    }
+
+    // Play a single OK beep
+    private void playOkBeep() {
+        new Thread(() -> {
+            try {
+                android.media.ToneGenerator toneGen = new android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 100);
+                toneGen.startTone(android.media.ToneGenerator.TONE_PROP_ACK, 200);
+                Thread.sleep(250);
+                toneGen.release();
+            } catch (Exception e) {
+                // Ignore
+            }
+        }).start();
+    }
+
+
+    @Override
+    public void onStart() {
+        super.onStart();
+    }
+
+    @Override
+    public void onPause() {
+        super.onPause();
+
+        // These things should happen regardless of unregistering success or not.
+        rwDemoProfileActivated = true;
+        mHandler.removeCallbacks(mProfileCheckRunnable);
+        mHandler.removeCallbacks(mDismissRunnable);
+        mHandler.removeCallbacks(mIdleStopRunnable);
+        if (progressBar != null) {
+            progressBar.setVisibility(View.GONE);
+        }
+        
+        if (statusDialog != null && statusDialog.isShowing()) {
+            statusDialog.dismiss();
+        }
+
+        try {
+            // Unregister for notifications
+            Intent intent = new Intent();
+            intent.setAction(RWDemoIntentParams.ACTION_NOTIFICATION_UNREGISTER);
+            intent.putExtra(RWDemoIntentParams.EXTRA_UNREGISTER_NOTIFICATION, RWDemoIntentParams.NOTIFICATION_TYPE_SCANNER);
+            sendBroadcast(intent);
+
+            intent.putExtra(RWDemoIntentParams.EXTRA_UNREGISTER_NOTIFICATION, RWDemoIntentParams.NOTIFICATION_TYPE_RFID);
+            sendBroadcast(intent);
+
+            intent.putExtra(RWDemoIntentParams.EXTRA_UNREGISTER_NOTIFICATION, RWDemoIntentParams.NOTIFICATION_TYPE_READER);
+            sendBroadcast(intent);
+
+            //Un-register broadcast receiver when you receive profile list broadcast
+            unregisterReceiver(datawedgeBroadcastReceiver);
+            unregisterReceiver(usbReceiver);
+        } catch (IllegalArgumentException e) {
+            //if receiver already unregistered
+            if (DEBUG) {
+                Log.d(TAG, e.getMessage() + "");
+            }
+        } catch (Exception e){
+            if (DEBUG) {
+                Log.d(TAG, e.getMessage() + "");
+            }
+        }
+    }
+
+    @Override
+    public void onStop() {
+        super.onStop();
+        if(scanState) {
+            toggleSoftScanTrigger();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        binding = null;
+    }
+
+    public boolean onOptionsItemSelected(MenuItem item) {
+        int id = item.getItemId();
+        if (id == R.id.action_about) {
+            AlertDialog builder;
+            try {
+                builder = AboutDialogBuilder.create(this);
+                builder.show();
+            } catch (Exception e) {
+                if (DEBUG) {
+                    Log.d(TAG, e.toString());
+                }
+            }
+            return true;
+        } else {
+            return super.onOptionsItemSelected(item);
+        }
+    }
+
+    @Override
+    public boolean onKeyUp(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_MENU) {
+            showPopupMenu(binding.actionButton4, RWDemoActivity.DW_DEMO_POPUP_MENU_SETTINGS);
+            return true;
+        } else if (keyCode == KeyEvent.KEYCODE_BACK) {
+            this.finish();
+            return true;
+        }
+
+        return false;
+    }
+
+    @Override
+    public void onClick(View v) {
+        //ImageButton ib = (ImageButton) v;
+    }
+
+    public void showPopupMenu(View v, int type) {
+        if (type == RWDemoActivity.DW_DEMO_POPUP_MENU_SETTINGS) {
+            setTheme(R.style.DWDemoTheme);
+            PopupMenu popup = new PopupMenu(this, v);
+            popup.setOnMenuItemClickListener(this);
+            popup.inflate(R.menu.dwdemo_menu);
+            popup.show();
+        }
+    }
+
+    @Override
+    public boolean onMenuItemClick(MenuItem item) {
+        int id = item.getItemId();
+        if (id == R.id.action_about) {
+            AlertDialog ad;
+            try {
+                ad = AboutDialogBuilder.create(this);
+                ad.show();
+            } catch (Exception e) {
+                if (DEBUG) {
+                    Log.d(TAG, e.toString());
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private void scrollDown() {
+        if (binding != null) {
+            binding.scrollView1.postDelayed(() -> binding.scrollView1.fullScroll(View.FOCUS_DOWN), VIEW_UPDATE_TIME_IN_MILLISECONDS);
+        }
+    }
+
+    private void setMainBackground() {
+        int alphaValue = 20;
+
+        Drawable[] layers = new Drawable[2];
+        Resources res = getResources();
+
+        ShapeDrawable rect = new ShapeDrawable();
+        rect.getPaint().setColor(BACKGROUND_GREY_COLOR_CODE);
+        layers[0] = rect;
+
+        Bitmap bmp = BitmapFactory.decodeResource(res, R.drawable.bg_dw_linearpattern);
+        BitmapDrawable bd = new BitmapDrawable(bmp);
+        bd.setTileModeXY(Shader.TileMode.REPEAT, Shader.TileMode.REPEAT);
+        bd.setAlpha(alphaValue);
+
+        layers[1] = bd;
+
+        LayerDrawable ld = new LayerDrawable(layers);
+
+        binding.relativeLayout1.setBackground(ld);
+    }
+
+    private void toggleSoftScanTrigger() {
+         Log.d(TAG,"toggleSoftScanTrigger START scanState is:" +scanState);
+        Intent i = new Intent();
+        i.setAction(RWDemoIntentParams.ACTION);
+        if (scanState) {
+            i.putExtra(RWDemoIntentParams.ACTION_EXTRA_SOFT_RFID_TRIGGER, DWAPI_STOP_SCANNING);
+            scanState = false;
+            isReadingSessionActive = false;
+            binding.rfidStatus.setText(R.string.status_ready);
+            binding.rfidStatus.setBackgroundColor(ContextCompat.getColor(this, R.color.status_ok));
+            mHandler.removeCallbacks(mIdleStopRunnable);
+        } else {
+            if (!isReadingSessionActive) {
+                clearReadResults();
+            }
+            isReadingSessionActive = true;
+            i.putExtra(RWDemoIntentParams.ACTION_EXTRA_SOFT_RFID_TRIGGER, DWAPI_START_SCANNING);
+            scanState = true;
+            binding.rfidStatus.setText(R.string.status_reading);
+            binding.rfidStatus.setBackgroundColor(ContextCompat.getColor(this, R.color.status_busy));
+            // Start idle timer when reading begins
+            mHandler.postDelayed(mIdleStopRunnable, 2000);
+        }
+        Log.d(TAG, "toggleSoftScanTrigger END scanState is:" + scanState);
+        this.sendBroadcast(i);
+
+
+    }
+
+    @Override
+    public void onNewIntent(Intent i) {
+        onNewIntentToOnResume = true;
+        handleDecodeData(i);
+    }
+
+    private void updateScannerStatus() {
+        if (binding != null) {
+            if (scannerStateText.equalsIgnoreCase("UNKNOWN") || scannerStateText.equalsIgnoreCase("DISABLED")) {
+                binding.scannerStatusLayout.setVisibility(View.GONE);
+            } else {
+                binding.scannerStatusLayout.setVisibility(View.VISIBLE);
+                binding.scannerStatus.setText(scannerStateText);
+                if (scannerStateText.equalsIgnoreCase("WAITING") || scannerStateText.equalsIgnoreCase("READY")) {
+                    binding.scannerStatus.setBackgroundColor(ContextCompat.getColor(this, R.color.status_ok));
+                } else if (scannerStateText.equalsIgnoreCase("SCANNING")) {
+                    binding.scannerStatus.setBackgroundColor(ContextCompat.getColor(this, R.color.status_busy));
+                } else {
+                    binding.scannerStatus.setBackgroundColor(ContextCompat.getColor(this, R.color.status_neutral));
+                }
+            }
+        }
+    }
+
+    private void updateReadCountStatus() {
+        if (binding != null) {
+            String total = getString(R.string.label_total, totalReadCount);
+            String unique = getString(R.string.label_unique, uniqueReads.size());
+            binding.readCountStatus.setText(total + "  " + unique);
+        }
+    }
+
+    private void clearReadResults() {
+        binding.outputView.setText("");
+        tvText = "";
+        totalReadCount = 0;
+        uniqueReads.clear();
+        updateReadCountStatus();
+    }
+
+    private String getNewUniqueReadsForDisplay(String data) {
+        if (data == null || data.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder newUniqueReads = new StringBuilder();
+        String[] reads = data.split("\\r?\\n");
+        for (String read : reads) {
+            if (read != null) {
+                String normalized = read.trim();
+                if (!normalized.isEmpty()) {
+                    totalReadCount++;
+                    String dedupeKey = normalized
+                            .replaceAll("[\\s-]", "")
+                            .toLowerCase(Locale.ROOT);
+                    if (uniqueReads.add(dedupeKey)) {
+                        if (newUniqueReads.length() > 0) {
+                            newUniqueReads.append(ENDLINE_CHAR);
+                        }
+                        newUniqueReads.append(normalized);
+                    }
+                }
+            }
+        }
+        return newUniqueReads.toString();
+    }
+
+    private void handleDecodeData(Intent i) {
+        if (i == null)
+            return;
+
+        String data = i.getStringExtra(DATA_STRING_TAG);
+
+        String source = i.getStringExtra(SOURCE_TAG);
+        if (source == null)
+            source = SOURCE_SCANNER;
+
+        int data_len = 0;
+        if (data != null)
+            data_len = data.length();
+
+        if (data_len == 0) {
+            if (source.equalsIgnoreCase(SOURCE_MSR)) {
+                byte[] rawData = i.getByteArrayExtra(MSR_DATA_TAG);
+                if (rawData != null) {
+                    data = DATA_MSR;    //convert(rawData);
+                    data_len = data.length();
+                }
+            }
+        }
+
+        if (data_len > 0) {
+            // Reset idle timer whenever new data arrives
+            mHandler.removeCallbacks(mIdleStopRunnable);
+            mHandler.postDelayed(mIdleStopRunnable, 2000);
+
+            binding.rfidStatus.setText(R.string.status_reading);
+            binding.rfidStatus.setBackgroundColor(ContextCompat.getColor(this, R.color.status_busy));
+            String newUniqueData = getNewUniqueReadsForDisplay(data);
+            updateReadCountStatus();
+            if (!newUniqueData.isEmpty()) {
+                if (tvText.length() > 0) {
+                    tvText += ENDLINE_CHAR;
+                }
+                tvText += newUniqueData;
+
+                binding.outputView.setText(tvText);
+                binding.scrollView1.post(() -> binding.scrollView1.fullScroll(View.FOCUS_DOWN));
+            }
+        }
+        setIntent(null);
+        mDataIntent = null;
+    }
+
+    /**
+     * AboutDialogBuilder class uses for create a about dialog box view
+     * which shows description about the application and the copyright
+     * information
+     */
+    public static class AboutDialogBuilder {
+        public static AlertDialog create(Context context) {
+
+            // Try to load the a package matching the name of our own package
+            String versionInfo = "1.0.6.2";
+            int msgPadding = 5;
+
+            String aboutTitle = context.getString(R.string.dwdemo2_about_title);
+            String versionString = String.format(context.getString(R.string.dwdemo2_about_version), versionInfo);
+
+            String aboutText = context.getString(R.string.dwdemo2_about_text);
+            String copyright = context.getString(R.string.dwdemo2_about_copyright);
+            String allrights = context.getString(R.string.dwdemo2_about_allrights);
+
+            // Set up the TextView
+            final TextView message = new TextView(context);
+            // We'll use a spannablestring to be able to make links clickable
+            final SpannableString aboutString = new SpannableString(aboutText);
+
+            // Set some padding
+            message.setPadding(msgPadding, msgPadding, msgPadding, msgPadding);
+
+            // Set up the final string
+            StringBuilder messageText = new StringBuilder();
+            messageText.append(versionString);
+            messageText.append(ENDLINE_CHAR);
+            messageText.append(ENDLINE_CHAR);
+            messageText.append(aboutString);
+            messageText.append(ENDLINE_CHAR);
+            messageText.append(ENDLINE_CHAR);
+            messageText.append(copyright);
+            messageText.append(ENDLINE_CHAR);
+            messageText.append(allrights);
+
+            message.setText(messageText);
+            message.setTextColor(ContextCompat.getColor(context, R.color.white2));
+
+            ScrollView scrollView = new ScrollView(context);
+            scrollView.addView(message, 0);
+
+            AlertDialog.Builder adb = new AlertDialog.Builder(context);
+            adb.setTitle(aboutTitle);
+            adb.setCancelable(true);
+            adb.setIcon(R.drawable.rfid_icon_s);
+            adb.setPositiveButton(context.getString(android.R.string.ok), null);
+            adb.setView(scrollView);
+            return adb.create();
+
+        }
+    }
+
+    /**
+     * Sets the specified image button to the given state,
+     * while "graying-out" the icon as well
+     *
+     * @param enabled   The state of the item
+     * @param item      The item to modify
+     * @param iconResId The icon ID
+     */
+    public static void setImageButtonEnabled(Context ctxt, boolean enabled, ImageButton item, int iconResId) {
+        item.setEnabled(enabled);
+        Drawable originalIcon = ContextCompat.getDrawable(ctxt, iconResId);
+        Drawable icon = enabled ? originalIcon : convertDrawableToGrayScale(originalIcon);
+        item.setImageDrawable(icon);
+    }
+
+    /**
+     * Mutates and applies a filter that converts the given drawable to a
+     * Gray image. This method may be used to simulate the colour of
+     * disable icons in JB ActionBar.
+     *
+     * @return a mutated version of the given drawable with a color filter applied.
+     */
+    public static Drawable convertDrawableToGrayScale(Drawable drawable) {
+        if (drawable == null) {
+            return null;
+        }
+        Drawable res = drawable.mutate();
+        res.setColorFilter(Color.GRAY, Mode.SRC_IN);
+        return res;
+    }
+
+    /**
+     * Enables the soft button when the DW profile is switched to RWDemo.
+     * Receiving the result for get the available profiles on datawedge
+     * through intent API. If the RWDemo profile is not among them
+     * create the RWDemo profile
+     */
+    private BroadcastReceiver datawedgeBroadcastReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent.hasExtra(RESULT_GET_ACTIVE_PROFILE)) {
+                if(intent.getExtras().getString(RESULT_GET_ACTIVE_PROFILE).equals(RWDemoIntentParams.BUNDLE_EXTRA_PROFILE_NAME_VAL)) {
+                    rwDemoProfileActivated = true;
+                    setSoftScanTriggerEnabled(true);
+                    if (progressBar != null) {
+                        progressBar.setVisibility(View.GONE);
+                    }
+                    scanState = false;
+                }
+            }
+
+            if (intent.hasExtra(RWDemoIntentParams.GET_AVAILABLE_PROFILE_LIST_RESULT)) {
+                String[] profiles = intent.getExtras().getStringArray(RWDemoIntentParams.GET_AVAILABLE_PROFILE_LIST_RESULT);
+
+                // Converts array to string list for easy processing
+                List<String> profileList = Arrays.asList(profiles);
+
+                if(profiles == null || !profileList.contains(RWDemoIntentParams.BUNDLE_EXTRA_PROFILE_NAME_VAL)) {
+                    // Creates profile if the RWDemo profile is not among the list
+                    createProfile();
+                }
+            }
+
+            if (intent.getAction().equals(RWDemoIntentParams.ACTION_NOTIFICATION)) {
+                if (intent.hasExtra(RWDemoIntentParams.EXTRA_NOTIFICATION_INFO)) {
+                    Bundle b = intent.getBundleExtra(RWDemoIntentParams.EXTRA_NOTIFICATION_INFO);
+                    String status = b.getString("STATUS");
+                    String type = b.getString("NOTIFICATION_TYPE");
+
+                    if (status != null && type != null) {
+                        if (type.equals(RWDemoIntentParams.NOTIFICATION_TYPE_SCANNER)) {
+                            scannerStateText = status;
+                            updateScannerStatus();
+                            if (status.equalsIgnoreCase("SCANNING")) {
+                                updateStatusDialog(getString(R.string.dialog_reading), false);
+                            } else if (status.equalsIgnoreCase("WAITING") || status.equalsIgnoreCase("READY")) {
+                                updateStatusDialog(getString(R.string.dialog_stopped), true);
+                            }
+                        } else if (type.equals(RWDemoIntentParams.NOTIFICATION_TYPE_RFID)) {
+                            if (status.equalsIgnoreCase("SCANNING")) {
+                                if (!isReadingSessionActive) {
+                                    clearReadResults();
+                                }
+                                isReadingSessionActive = true;
+                                binding.rfidStatus.setText(R.string.status_reading);
+                                binding.rfidStatusLayout.setVisibility(View.VISIBLE);
+                                binding.rfidStatus.setBackgroundColor(ContextCompat.getColor(context, R.color.status_busy));
+                                updateStatusDialog(getString(R.string.dialog_reading), false);
+                            } else if (status.equalsIgnoreCase("WAITING") || status.equalsIgnoreCase("READY")) {
+                                isReadingSessionActive = false;
+                                binding.rfidStatus.setText(R.string.status_ready);
+                                binding.rfidStatusLayout.setVisibility(View.VISIBLE);
+                                binding.rfidStatus.setBackgroundColor(ContextCompat.getColor(context, R.color.status_ok));
+                                updateStatusDialog(getString(R.string.dialog_stopped), true);
+                            } else if (status.equalsIgnoreCase("UNKNOWN")) {
+                                binding.rfidStatusLayout.setVisibility(View.GONE);
+                            } else {
+                                binding.rfidStatus.setText(status);
+                                binding.rfidStatusLayout.setVisibility(View.VISIBLE);
+                                binding.rfidStatus.setBackgroundColor(ContextCompat.getColor(context, R.color.status_error));
+                            }
+                        } else if (type.equals(RWDemoIntentParams.NOTIFICATION_TYPE_READER)) {
+                            if (status.equalsIgnoreCase("CONNECTED")) {
+                                binding.readerStatus.setText(R.string.status_connected);
+                                binding.readerStatusLayout.setVisibility(View.VISIBLE);
+                                binding.readerStatus.setBackgroundColor(ContextCompat.getColor(context, R.color.status_ok));
+                            } else if (status.equalsIgnoreCase("UNKNOWN")) {
+                                binding.readerStatusLayout.setVisibility(View.GONE);
+                            } else {
+                                binding.readerStatus.setText(status);
+                                binding.readerStatusLayout.setVisibility(View.VISIBLE);
+                                binding.readerStatus.setBackgroundColor(ContextCompat.getColor(context, R.color.status_error));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    private final BroadcastReceiver usbReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            if (Intent.ACTION_POWER_CONNECTED.equals(action)) {
+                updateStatusDialog(getString(R.string.dialog_charging), true);
+                moveTaskToBack(true);
+            } else if (Intent.ACTION_POWER_DISCONNECTED.equals(action)) {
+                updateStatusDialog(getString(R.string.dialog_discharging), true);
+                Intent i = new Intent(context, RWDemoActivity.class);
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                context.startActivity(i);
+            }
+        }
+    };
+
+    private void updateStatusDialog(String message, boolean autoDismiss) {
+        mHandler.removeCallbacks(mDismissRunnable);
+        if (statusDialog == null) {
+            statusDialog = new AlertDialog.Builder(this)
+                    .setCancelable(false)
+                    .create();
+        }
+        statusDialog.setMessage(message);
+        if (!statusDialog.isShowing()) {
+            statusDialog.show();
+        }
+        if (autoDismiss) {
+            mHandler.postDelayed(mDismissRunnable, 1000);
+        }
+    }
+
+    /**
+     * Dynamically register broadcast receiver
+     */
+    private void registerReceivers() {
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(RESULT_ACTION);
+        filter.addAction(RWDemoIntentParams.ACTION_NOTIFICATION);
+        filter.addCategory(Intent.CATEGORY_DEFAULT);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(datawedgeBroadcastReceiver, filter, Context.RECEIVER_EXPORTED);
+        } else {
+            registerReceiver(datawedgeBroadcastReceiver, filter);
+        }
+
+        IntentFilter usbFilter = new IntentFilter();
+        usbFilter.addAction(Intent.ACTION_POWER_CONNECTED);
+        usbFilter.addAction(Intent.ACTION_POWER_DISCONNECTED);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(usbReceiver, usbFilter, Context.RECEIVER_EXPORTED);
+        } else {
+            registerReceiver(usbReceiver, usbFilter);
+        }
+
+        // Register for notifications
+        registerForNotification(RWDemoIntentParams.NOTIFICATION_TYPE_SCANNER);
+        registerForNotification(RWDemoIntentParams.NOTIFICATION_TYPE_RFID);
+        registerForNotification(RWDemoIntentParams.NOTIFICATION_TYPE_READER);
+    }
+
+    private void registerForNotification(String type) {
+        Intent intent = new Intent();
+        intent.setAction(RWDemoIntentParams.ACTION_NOTIFICATION_REGISTER);
+        intent.putExtra(RWDemoIntentParams.EXTRA_REGISTER_NOTIFICATION, type);
+        sendBroadcast(intent);
+    }
+
+}
